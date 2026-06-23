@@ -20,8 +20,8 @@ _SCHEMA_PATH = _PROJECT_ROOT / "db" / "schema.sql"
 # INSERT OR IGNORE 確保重複執行初始化腳本時不報 UNIQUE 衝突錯誤
 SEED_AGENTS = [
     ("A", "總監",         0, None, None, "personas/role_a.md"),
-    ("B", "PM 經理",      0, None, "A",  "personas/role_b.md"),
-    ("C", "校園推廣組員",  0, None, "B",  "personas/role_c.md"),
+    ("B", "PM 經理",      -1, None, "A",  "personas/role_b.md"),
+    ("C", "校園推廣組員",  -2, None, "B",  "personas/role_c.md"),
 ]
 
 

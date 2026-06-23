@@ -1,0 +1,35 @@
+# 機密
+.env
+.env.local
+.env.prod
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# 資料庫（只在 VPS 本機，不 commit）
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 日誌
+logs/
+
+# 工具快取
+.ruff_cache/
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.stackdump
+
+# OS
+.DS_Store
+Thumbs.db

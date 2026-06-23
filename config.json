@@ -1,0 +1,35 @@
+{
+  "project": {
+    "name": "addwii-pm",
+    "timezone": "Asia/Taipei"
+  },
+  "discord": {
+    "guild_id": 0,
+    "channel_id": 0,
+    "max_hops": 3
+  },
+  "members": {
+    "A": {
+      "display_name": "總監",
+      "discord_user_id": 0,
+      "bot_token_env": "BOT_TOKEN_A",
+      "reports_to": null
+    },
+    "B": {
+      "display_name": "PM 經理",
+      "discord_user_id": 0,
+      "bot_token_env": "BOT_TOKEN_B",
+      "reports_to": "A"
+    },
+    "C": {
+      "display_name": "校園推廣組員",
+      "discord_user_id": 0,
+      "bot_token_env": "BOT_TOKEN_C",
+      "reports_to": "B"
+    }
+  },
+  "logging": {
+    "dir": "logs",
+    "retention_days": 30
+  }
+}

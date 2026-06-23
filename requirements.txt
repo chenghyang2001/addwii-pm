@@ -1,0 +1,12 @@
+# Discord bot
+discord.py>=2.3.2
+
+# Web dashboard
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# 資料驗證（IntentEngine JSON → Pydantic）
+pydantic>=2.7.0
+
+# 環境變數
+python-dotenv>=1.0.0

@@ -1,0 +1,8 @@
+graph TD;
+    A[User Message] -->|1. on_message| B[Discord Bot];
+    B -->|2. process_human_message| C[Log Message];
+    C -->|3. parse_intent| D[Intent Engine];
+    D -->|4. handle_action| E[Actions Handler];
+    E -->|5. DB Operation| F[Database];
+    F -->|6. Response| B;
+    B -->|7. Send Response| A;

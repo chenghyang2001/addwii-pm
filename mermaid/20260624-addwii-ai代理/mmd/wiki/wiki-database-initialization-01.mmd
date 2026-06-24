@@ -1,0 +1,11 @@
+flowchart TD
+    A[Start] --> B[Get DB Path]
+    B --> C[Check schema.sql Exists]
+    C -->|Exists| D[Connect to DB]
+    C -->|Does Not Exist| E[Print Error & Exit]
+    D --> F[Execute Schema]
+    F --> G[Seed Initial Data]
+    G --> H[Commit Changes]
+    H --> I[Print Confirmation]
+    I --> J[Fetch & Print Agents]
+    J --> K[End]

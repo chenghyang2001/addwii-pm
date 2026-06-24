@@ -1,0 +1,26 @@
+flowchart TD
+  A(["Discord on_message"]) --> B{"是自己訊息?"}
+  B -- 是 --> Z1(["忽略"])
+  B -- 否 --> C{"是目標頻道?"}
+  C -- 否 --> Z2(["忽略"])
+  C -- 是 --> D{"是 Bot 訊息?"}
+  D -- 是 --> E["_handle_bot_message"]
+  E --> F{"hop >= MAX_HOPS 3"}
+  F -- 是 --> Z3(["停止 防迴圈"])
+  F -- 否 --> G{"自己在 @mentions?"}
+  G -- 否 --> Z4(["忽略"])
+  G -- 是 --> H["invoke_claude 生成 Bot 回應"]
+  H --> I["channel.send + hop+1"]
+  D -- 否 --> J["resolve_role 確認主人"]
+  J --> K{"role 匹配此 Bot?"}
+  K -- 否 --> Z5(["忽略"])
+  K -- 是 --> L["process_human_message"]
+  L --> M["① INSERT messages human"]
+  M --> N["② build_system_prompt"]
+  N --> O["③ invoke_claude 對話回應"]
+  O --> P["④ parse_intent IntentEngine"]
+  P --> Q{"有業務動作?"}
+  Q -- 是 --> R["⑤ handle_action 寫入 DB"]
+  Q -- 否 --> S["⑥ channel.send 回覆"]
+  R --> S
+  S --> T["⑦ INSERT messages agent"]

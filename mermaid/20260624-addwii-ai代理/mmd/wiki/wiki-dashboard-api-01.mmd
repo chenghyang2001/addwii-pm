@@ -1,0 +1,5 @@
+graph TD;
+    A[API Endpoint] -->|calls| B[Query Function];
+    B -->|executes SQL| C[Database Connection];
+    C -->|returns data| B;
+    B -->|returns data| A;

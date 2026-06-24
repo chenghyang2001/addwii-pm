@@ -1,0 +1,6 @@
+graph TD;
+    A[Config] -->|accesses| B[Database]
+    A -->|provides| C[Logger]
+    B -->|executes| D[SQL Queries]
+    C -->|logs| E[CLI Interactions]
+    E -->|invokes| F[Claude CLI]

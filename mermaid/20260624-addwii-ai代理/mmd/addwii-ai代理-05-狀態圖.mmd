@@ -1,0 +1,19 @@
+stateDiagram-v2
+  [*] --> assigned: assign_task 動作寫入
+  assigned --> in_progress: Bot 開始執行任務
+  assigned --> cancelled: 取消指派
+  in_progress --> done: report_task status=done
+  in_progress --> blocked: 遇到阻礙
+  in_progress --> cancelled: 取消執行
+  blocked --> in_progress: 阻礙解除繼續
+  done --> [*]: 任務完成記錄 task_events
+  cancelled --> [*]: 任務取消記錄 task_events
+
+  note right of assigned
+    IntentEngine 寫入
+    DB tasks 資料表
+  end note
+  note right of done
+    DB 記錄 task_events
+    狀態不可逆
+  end note

@@ -1,0 +1,16 @@
+block-beta
+  columns 3
+  discord["Discord Gateway\n#team 頻道"]:3
+  botA["Bot A\n總監代理\nsystemd"] botB["Bot B\nPM 代理\nsystemd"] botC["Bot C\n組員代理\nsystemd"]
+  claude["claude -p CLI\nMax 訂閱零費用"] db["SQLite WAL\naddwii.db\n7 個資料表"] dashboard["FastAPI :8092\nDashboard\nCloudflare Tunnel"]
+
+  discord --> botA
+  discord --> botB
+  discord --> botC
+  botA --> claude
+  botB --> claude
+  botC --> claude
+  botA --> db
+  botB --> db
+  botC --> db
+  dashboard --> db

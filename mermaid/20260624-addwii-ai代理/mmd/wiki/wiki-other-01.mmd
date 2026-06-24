@@ -1,0 +1,8 @@
+flowchart TD
+    A[Discord Channel] -->|Message Received| B[Bot]
+    B --> C[Config Management]
+    B --> D[Database Management]
+    B --> E[Logging]
+    C -->|Resolve Role| F[Agent Role]
+    D -->|Execute Query| G[SQLite Database]
+    E -->|Log Events| H[Log File]

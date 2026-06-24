@@ -49,6 +49,13 @@ addwii-pm/
 │   └── schema.sql       # 完整 DB schema（⚠️ 需 VPS QA）
 ├── tools/
 │   └── init_db.py       # DB 初始化腳本（⚠️ 需 VPS QA）
+├── doc/
+│   └── architecture.md  # 系統架構文件（208 行，arch-deck 產出）
+├── mermaid/
+│   └── 20260624-addwii-ai代理/
+│       ├── mmd/         # 5 張架構 .mmd + mmd/wiki/ 7 張 GitNexus wiki .mmd
+│       ├── png/         # 5 張架構 PNG + png/wiki/ 7 張 wiki PNG
+│       └── addwii-pm-架構圖表合輯.pptx  # 14 頁簡報合輯（arch-deck 產出）
 ├── agent/               # M2+ 建立
 ├── personas/            # M2+ 建立
 ├── dashboard/           # M5 建立

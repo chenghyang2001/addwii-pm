@@ -1,0 +1,6 @@
+graph TD;
+    A[Main Application] -->|Initializes| B[Agent]
+    B -->|Processes Messages| C[Core Functionality]
+    C -->|Handles DB Operations| D[Database Initialization]
+    B -->|Fetches Data| E[Dashboard API]
+    C -->|Logs Events| F[Logging]

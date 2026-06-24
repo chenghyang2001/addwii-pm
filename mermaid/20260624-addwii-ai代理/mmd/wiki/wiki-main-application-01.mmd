@@ -1,0 +1,6 @@
+graph TD;
+    A["main()"] --> B["build_parser()"]
+    B --> C["parse_args()"]
+    A --> D["validate_token()"]
+    D --> E["AddwiiBot(role)"]
+    E --> F["bot.run(token)"]

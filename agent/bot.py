@@ -5,6 +5,7 @@
 - 不用 if message.author.bot: return（否則 bot 看不到彼此）
 - Bot-to-Bot：提取 [hop:N]，若 hop >= MAX_HOPS 或未被 @mention 則忽略
 - IntentEngine 解析意圖 → handle_action 寫 DB → 附加到 claude 回應
+- messages 表欄位對應 schema.sql：text/role/speaker_kind/hop
 """
 import asyncio
 import datetime
@@ -62,16 +63,19 @@ class AddwiiBot(discord.Client):
         self.logger = setup_logger(f"bot-{self.role}")
 
     async def on_ready(self) -> None:
-        """Bot 上線時更新 agents 表的 discord_bot_id。"""
+        """Bot 上線時更新 agents 表的 bot_discord_id。
+
+        schema.sql 中欄位名稱為 bot_discord_id（非 discord_bot_id）。
+        """
         self.logger.info("Bot %s 已上線，user ID = %s", self.role, self.user.id)
         try:
             execute_write(
-                "UPDATE agents SET discord_bot_id = ? WHERE role = ?",
+                "UPDATE agents SET bot_discord_id = ? WHERE role = ?",
                 (self.user.id, self.role),
             )
-            self.logger.info("已更新 agents.discord_bot_id = %s", self.user.id)
+            self.logger.info("已更新 agents.bot_discord_id = %s", self.user.id)
         except Exception as exc:
-            self.logger.error("更新 discord_bot_id 失敗：%s", exc)
+            self.logger.error("更新 bot_discord_id 失敗：%s", exc)
 
     async def on_message(self, message: discord.Message) -> None:
         """處理收到的 Discord 訊息。
@@ -160,6 +164,7 @@ class AddwiiBot(discord.Client):
         """處理主人訊息：記錄→意圖解析→AI 回應→DB 寫入→發送→記錄回應。
 
         M4 新增：IntentEngine 解析意圖，若非 none 則呼叫 handle_action 寫 DB。
+        messages 表欄位：text/role/speaker_kind/hop（對應 schema.sql）。
 
         Args:
             message: 來自主人的 Discord 訊息物件
@@ -167,14 +172,14 @@ class AddwiiBot(discord.Client):
         content = message.content
         self.logger.info("收到主人訊息：%s... (%d 字)", content[:30], len(content))
 
-        # 1. 記錄人類訊息到 messages 表
+        # 1. 記錄人類訊息到 messages 表（speaker_kind='human'）
         now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
         try:
             execute_write(
-                """INSERT INTO messages
-                   (channel_id, sender_role, sender_type, content, hop_count, created_at)
-                   VALUES (?, ?, 'human', ?, 0, ?)""",
-                (str(message.channel.id), self.role, content, now),
+                """INSERT OR IGNORE INTO messages
+                   (channel_id, message_id, speaker_kind, role, text, hop, created_at)
+                   VALUES (?, ?, 'human', ?, ?, 0, ?)""",
+                (message.channel.id, message.id, self.role, content, now),
             )
         except Exception as exc:
             self.logger.error("記錄人類訊息失敗：%s", exc)
@@ -221,14 +226,14 @@ class AddwiiBot(discord.Client):
             self.logger.error("發送訊息失敗：%s", exc)
             return
 
-        # 7. 記錄 agent 回應到 messages 表
+        # 7. 記錄 agent 回應到 messages 表（speaker_kind='agent'）
         now_reply = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
         try:
             execute_write(
                 """INSERT INTO messages
-                   (channel_id, sender_role, sender_type, content, hop_count, created_at)
-                   VALUES (?, ?, 'agent', ?, 0, ?)""",
-                (str(message.channel.id), self.role, final_response, now_reply),
+                   (channel_id, speaker_kind, role, text, hop, created_at)
+                   VALUES (?, 'agent', ?, ?, 0, ?)""",
+                (message.channel.id, self.role, final_response, now_reply),
             )
         except Exception as exc:
             self.logger.error("記錄 agent 回應失敗：%s", exc)
@@ -237,15 +242,18 @@ class AddwiiBot(discord.Client):
 def _fetch_open_tasks_context() -> str:
     """從 DB 查詢開放中的任務，組成 db_context 字串。
 
+    tasks 欄位：assignee / assigner（非 assignee_role / assigner_role）。
+    status 合法值：assigned / in_progress / done / blocked / cancelled。
+
     Returns:
         格式化後的開放任務字串；若無任務則回傳空字串
     """
     try:
         with get_conn(read_only=True) as conn:
             rows = conn.execute(
-                """SELECT id, title, assignee_role, deadline
+                """SELECT id, title, assignee, deadline
                    FROM tasks
-                   WHERE status IN ('open', 'in_progress')
+                   WHERE status IN ('assigned', 'in_progress')
                    ORDER BY deadline ASC
                    LIMIT 10"""
             ).fetchall()
@@ -257,7 +265,7 @@ def _fetch_open_tasks_context() -> str:
         for row in rows:
             deadline_str = row["deadline"] or "無期限"
             lines.append(
-                f"- #{row['id']} [{row['assignee_role']}] {row['title']}（期限：{deadline_str}）"
+                f"- #{row['id']} [{row['assignee']}] {row['title']}（期限：{deadline_str}）"
             )
         return "\n".join(lines)
 
@@ -290,6 +298,7 @@ if __name__ == "__main__":
             msg.channel.id = channel_id or cfg.channel_id
             msg.content = content
             msg.mentions = []
+            msg.id = 12345
             return msg
 
         async def test_tc1_self_message_skipped(self):

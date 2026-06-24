@@ -1,6 +1,7 @@
 """ActionHandler — 根據 ParsedAction 執行 DB 寫入，並組合 Discord 回應訊息。
 
 所有寫入使用參數化查詢，不直接插入字串（防 SQL injection）。
+欄位名稱對應 db/schema.sql 實際定義。
 """
 import datetime
 from typing import Optional
@@ -21,8 +22,8 @@ _logger = setup_logger("actions")
 
 
 def _now_iso() -> str:
-    """回傳目前 UTC 時間的 ISO 8601 字串。"""
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    """回傳目前 UTC 時間的 ISO 8601 字串（無時區後綴，與 SQLite 兼容）。"""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def handle_action(
@@ -36,7 +37,7 @@ def handle_action(
     Args:
         action: IntentEngine 解析後的 Action 物件
         author_role: 發訊息的 bot 或人類的 role（'A'/'B'/'C'）
-        channel_id: Discord channel ID（字串）
+        channel_id: Discord channel ID（字串，僅用於日誌）
         hop: 目前的 hop 計數，用於 bot-to-bot [hop:N] 標記
 
     Returns:
@@ -64,19 +65,22 @@ def handle_action(
 def _handle_assign_task(
     action: ActionAssignTask, author_role: str, hop: int
 ) -> str:
-    """指派任務到 tasks 表，並建立 task_events 記錄。"""
+    """指派任務到 tasks 表，並建立 task_events 記錄。
+
+    tasks 欄位：assigner, assignee（非 assigner_role/assignee_role）
+    """
     now = _now_iso()
     try:
-        # 插入任務
+        # 插入任務（status 預設 'assigned'，符合 schema CHECK 約束）
         row_id = execute_write(
             """INSERT INTO tasks
-               (title, assignee_role, assigner_role, status, deadline, created_at, updated_at)
-               VALUES (?, ?, ?, 'open', ?, ?, ?)""",
-            (action.title, action.assignee, author_role, action.deadline, now, now),
+               (title, assigner, assignee, status, deadline, created_at, updated_at)
+               VALUES (?, ?, ?, 'assigned', ?, ?, ?)""",
+            (action.title, author_role, action.assignee, action.deadline, now, now),
         )
-        # 記錄 task_event
+        # 記錄 task_event（欄位：actor / event / note）
         execute_write(
-            """INSERT INTO task_events (task_id, actor_role, event_type, detail, created_at)
+            """INSERT INTO task_events (task_id, actor, event, note, created_at)
                VALUES (?, ?, 'created', ?, ?)""",
             (row_id, author_role, f"由 {author_role} 指派給 {action.assignee}", now),
         )
@@ -93,10 +97,23 @@ def _handle_assign_task(
 def _handle_report_task(
     action: ActionReportTask, author_role: str, hop: int
 ) -> str:
-    """更新 tasks.status，並建立 task_events 記錄。"""
+    """更新 tasks.status，並建立 task_events 記錄。
+
+    tasks status 合法值：assigned / in_progress / done / blocked / cancelled
+    """
     now = _now_iso()
+    # 映射外部 status 到 schema 合法值
+    STATUS_MAP = {
+        "open": "assigned",
+        "in_progress": "in_progress",
+        "done": "done",
+        "cancelled": "cancelled",
+        "blocked": "blocked",
+    }
+    mapped_status = STATUS_MAP.get(action.status, action.status)
+
     try:
-        # 確認任務存在
+        # 確認任務存在（SELECT 欄位對應 schema：assigner/assignee）
         with get_conn(read_only=True) as conn:
             row = conn.execute(
                 "SELECT id, title, status FROM tasks WHERE id = ?",
@@ -108,21 +125,22 @@ def _handle_report_task(
         # 更新狀態
         execute_write(
             "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
-            (action.status, now, action.task_id),
+            (mapped_status, now, action.task_id),
         )
-        # 記錄 task_event
-        summary = action.summary or ""
+        # 記錄 task_event（欄位：actor / event / note）
+        note_text = action.summary or ""
         execute_write(
-            """INSERT INTO task_events (task_id, actor_role, event_type, detail, created_at)
-               VALUES (?, ?, 'status_changed', ?, ?)""",
-            (action.task_id, author_role, f"狀態更新為 {action.status}：{summary}", now),
+            """INSERT INTO task_events (task_id, actor, event, from_status, to_status, note, created_at)
+               VALUES (?, ?, 'status_changed', ?, ?, ?, ?)""",
+            (action.task_id, author_role, row["status"], mapped_status, note_text, now),
         )
-        status_emoji = {"open": "📋", "in_progress": "🔄", "done": "✅", "cancelled": "❌"}.get(
-            action.status, "❓"
-        )
+        status_emoji = {
+            "assigned": "📋", "in_progress": "🔄", "done": "✅",
+            "cancelled": "❌", "blocked": "🚫"
+        }.get(mapped_status, "❓")
         return (
             f"{status_emoji} 任務 #{action.task_id}「{row['title']}」"
-            f"更新為 {action.status} [hop:{hop}]"
+            f"更新為 {mapped_status} [hop:{hop}]"
         )
     except Exception as exc:
         _logger.error("report_task DB 寫入失敗：%s", exc)
@@ -132,7 +150,10 @@ def _handle_report_task(
 def _handle_add_note(
     action: ActionAddNote, author_role: str, hop: int
 ) -> str:
-    """新增筆記到 notes 表。"""
+    """新增筆記到 notes 表。
+
+    notes 欄位：owner / content / tags / created_at
+    """
     now = _now_iso()
     try:
         row_id = execute_write(
@@ -148,14 +169,19 @@ def _handle_add_note(
 def _handle_add_meeting(
     action: ActionAddMeeting, author_role: str, hop: int
 ) -> str:
-    """新增會議記錄到 meeting_records 表。"""
+    """新增會議記錄到 meeting_records 表。
+
+    meeting_records 欄位：owner / title / summary（必填）/ decisions / action_items
+    """
     now = _now_iso()
     try:
+        # summary 是必填欄位，用 decisions 或 title 填充
+        summary = action.decisions or f"{action.title} 會議記錄"
         row_id = execute_write(
             """INSERT INTO meeting_records
-               (title, recorder_role, decisions, action_items, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (action.title, author_role, action.decisions, action.action_items, now),
+               (owner, title, summary, decisions, action_items, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (author_role, action.title, summary, action.decisions, action.action_items, now),
         )
         return f"🗒️ 會議記錄 #{row_id}「{action.title}」已儲存 [hop:{hop}]"
     except Exception as exc:
@@ -166,11 +192,14 @@ def _handle_add_meeting(
 def _handle_add_reflection(
     action: ActionAddReflection, author_role: str, hop: int
 ) -> str:
-    """新增反思到 reflections 表。"""
+    """新增反思到 reflections 表。
+
+    reflections 欄位：owner / content / mood / created_at
+    """
     now = _now_iso()
     try:
         row_id = execute_write(
-            "INSERT INTO reflections (author_role, content, created_at) VALUES (?, ?, ?)",
+            "INSERT INTO reflections (owner, content, created_at) VALUES (?, ?, ?)",
             (author_role, action.text, now),
         )
         return f"💭 反思 #{row_id} 已儲存 [hop:{hop}]"

@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>addwii-pm 任務看板</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d27;
+      --border: #2d3142;
+      --text: #e2e8f0;
+      --muted: #8892a0;
+      --open: #3b82f6;
+      --progress: #f59e0b;
+      --done: #10b981;
+      --cancelled: #6b7280;
+      --accent: #7c3aed;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    header h1 { font-size: 1.25rem; font-weight: 700; }
+    header .subtitle { color: var(--muted); font-size: 0.85rem; }
+
+    .stats-bar {
+      display: flex;
+      gap: 1rem;
+      padding: 0.75rem 2rem;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .stat-chip {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.8rem;
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+    }
+
+    .stat-chip .num { font-weight: 700; color: var(--accent); }
+
+    main {
+      padding: 1.5rem 2rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .column-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .column-header h2 { font-size: 0.9rem; font-weight: 600; }
+
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+
+    .dot-open { background: var(--open); }
+    .dot-in_progress { background: var(--progress); }
+    .dot-done { background: var(--done); }
+    .dot-cancelled { background: var(--cancelled); }
+
+    .count-badge {
+      margin-left: auto;
+      background: var(--border);
+      border-radius: 9999px;
+      padding: 0.1rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .task-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .task-card .title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+    }
+
+    .task-card .meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .role-tag {
+      background: var(--accent);
+      color: white;
+      border-radius: 4px;
+      padding: 0.1rem 0.35rem;
+      font-weight: 700;
+    }
+
+    .empty-col {
+      color: var(--muted);
+      font-size: 0.85rem;
+      padding: 1rem 0;
+      text-align: center;
+    }
+
+    #refresh-btn {
+      margin-left: auto;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 0.375rem;
+      padding: 0.4rem 1rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    #refresh-btn:hover { opacity: 0.8; }
+
+    #last-updated {
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    .error-msg {
+      color: #ef4444;
+      padding: 1rem 2rem;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>🤖 addwii-pm 任務看板</h1>
+      <div class="subtitle">三 AI 代理人 Discord 協作系統</div>
+    </div>
+    <span id="last-updated"></span>
+    <button id="refresh-btn" onclick="loadData()">重新整理</button>
+  </header>
+
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-chip">載入中…</div>
+  </div>
+
+  <div id="error-area"></div>
+
+  <main id="board">
+    <!-- 動態填充 -->
+  </main>
+
+  <script>
+    const COLUMNS = [
+      { key: 'open',        label: '待辦',    dot: 'dot-open' },
+      { key: 'in_progress', label: '進行中',  dot: 'dot-in_progress' },
+      { key: 'done',        label: '完成',    dot: 'dot-done' },
+      { key: 'cancelled',   label: '取消',    dot: 'dot-cancelled' },
+    ];
+
+    function formatDeadline(d) {
+      if (!d) return '無期限';
+      const diff = Math.ceil((new Date(d) - new Date()) / 86400000);
+      if (diff < 0) return `⚠️ 已逾期 ${-diff} 天`;
+      if (diff === 0) return '今天截止！';
+      return `${d}（還剩 ${diff} 天）`;
+    }
+
+    function renderBoard(tasks) {
+      const board = document.getElementById('board');
+      board.innerHTML = '';
+
+      COLUMNS.forEach(col => {
+        const items = tasks[col.key] || [];
+        const colEl = document.createElement('div');
+
+        const header = `
+          <div class="column-header">
+            <span class="dot ${col.dot}"></span>
+            <h2>${col.label}</h2>
+            <span class="count-badge">${items.length}</span>
+          </div>`;
+
+        const cards = items.length === 0
+          ? `<div class="empty-col">—— 無任務 ——</div>`
+          : items.map(t => `
+            <div class="task-card">
+              <div class="title">#${t.id} ${escHtml(t.title)}</div>
+              <div class="meta">
+                <span class="role-tag">${t.assignee_role}</span>
+                <span>指派人：${t.assigner_role || '—'}</span>
+                <span>${formatDeadline(t.deadline)}</span>
+              </div>
+            </div>`).join('');
+
+        colEl.innerHTML = header + cards;
+        board.appendChild(colEl);
+      });
+    }
+
+    function renderStats(stats, agents) {
+      const bar = document.getElementById('stats-bar');
+      const agentNames = agents.map(a => `${a.role}:${a.display_name}`).join(' / ');
+      bar.innerHTML = [
+        `<div class="stat-chip">任務 <span class="num">${stats.tasks}</span></div>`,
+        `<div class="stat-chip">訊息 <span class="num">${stats.messages}</span></div>`,
+        `<div class="stat-chip">筆記 <span class="num">${stats.notes}</span></div>`,
+        `<div class="stat-chip">代理人 <span class="num">${agentNames}</span></div>`,
+      ].join('');
+    }
+
+    function escHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    async function loadData() {
+      document.getElementById('error-area').innerHTML = '';
+      try {
+        const res = await fetch('/api/overview');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderBoard(data.tasks);
+        renderStats(data.stats, data.agents);
+        document.getElementById('last-updated').textContent =
+          '更新時間：' + new Date().toLocaleTimeString('zh-TW');
+      } catch (err) {
+        document.getElementById('error-area').innerHTML =
+          `<div class="error-msg">⚠️ 載入失敗：${err.message}</div>`;
+      }
+    }
+
+    // 初始載入 + 每 30 秒自動更新
+    loadData();
+    setInterval(loadData, 30000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+[Unit]
+Description=addwii-pm Bot C（校園推廣組員 AI 代理人）
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=claude
+WorkingDirectory=/opt/addwii-pm
+Environment=PYTHONUTF8=1
+EnvironmentFile=/opt/addwii-pm/.env
+ExecStart=/opt/addwii-pm/.venv/bin/python3 main.py --role C
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=addwii-bot-c
+
+[Install]
+WantedBy=multi-user.target

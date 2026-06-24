@@ -1,0 +1,20 @@
+[Unit]
+Description=addwii-pm Dashboard（FastAPI port 8092）
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=claude
+WorkingDirectory=/opt/addwii-pm
+Environment=PYTHONUTF8=1
+EnvironmentFile=/opt/addwii-pm/.env
+ExecStart=/opt/addwii-pm/.venv/bin/uvicorn dashboard.api:app --host 0.0.0.0 --port 8092
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=addwii-dashboard
+
+[Install]
+WantedBy=multi-user.target

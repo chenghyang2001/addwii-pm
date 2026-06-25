@@ -3,6 +3,9 @@
 .env.local
 .env.prod
 
+# 內網對接機密文件（含 LAN 金鑰/IP/資料表結構，public repo 不可外洩）
+doc/AIMOS_LACP/
+
 # Python
 __pycache__/
 *.py[cod]

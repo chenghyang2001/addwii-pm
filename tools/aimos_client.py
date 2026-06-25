@@ -12,6 +12,10 @@
 執行前需先設定金鑰環境變數，例如：export AIMOS_LINGCE_KEY=你的金鑰
 （或於建構 AimosClient 時以 lingce_key 參數傳入）。本 repo 為 public，
 金鑰一律不寫入程式碼。Base URL 可用 AIMOS_BASE_URL 覆蓋，未設定走預設常數。
+
+身分預設為 addwii_platform（俞威名整合 doc v1.0 的整合目標，host
+localhost:8505 的 Qwen Bot）；可用環境變數 AIMOS_SOURCE 或 CLI --source
+切回舊 addwii 服務。
 """
 
 import argparse
@@ -26,6 +30,10 @@ import urllib.request
 # 預設 Base URL：對接文件 v1.0 提供的 LAN 內網位址。
 # URL 不是機密，保留常數方便內網開箱即連；金鑰則一律不寫死（見 __init__）。
 DEFAULT_BASE_URL = "http://192.168.23.186:8560"
+
+# 預設身分：俞威名整合 doc v1.0（Table 8）的整合目標 addwii_platform；
+# source 與 data.agent_id 同值，agent_id 須對應 agents 表的 agent_code。
+DEFAULT_SOURCE = "addwii_platform"
 
 
 class AimosError(Exception):
@@ -44,7 +52,7 @@ class AimosError(Exception):
 class AimosClient:
     """AIMOS LACP REST 最小 client。"""
 
-    def __init__(self, base_url=None, lingce_key=None, timeout=8):
+    def __init__(self, base_url=None, lingce_key=None, timeout=8, source=None, agent_id=None):
         # base_url 解析順序：建構參數 → 環境變數 → 預設常數（URL 非機密可有預設）。
         self.base_url = (
             base_url or os.environ.get("AIMOS_BASE_URL") or DEFAULT_BASE_URL
@@ -59,6 +67,13 @@ class AimosClient:
                 message="缺少 AIMOS 金鑰：請設定環境變數 AIMOS_LINGCE_KEY，"
                 "或建構 AimosClient 時傳入 lingce_key",
             )
+        # 身分解析順序：建構參數 → 環境變數 AIMOS_SOURCE → 預設 addwii_platform。
+        # 預設身分為 addwii_platform（俞威名整合 doc v1.0 的整合目標）；
+        # 舊 addwii 服務可用 --source addwii（或 AIMOS_SOURCE）覆蓋。
+        self.source = source or os.environ.get("AIMOS_SOURCE") or DEFAULT_SOURCE
+        # agent_id 為 None 時 fallback 為 self.source：doc Table 8 中
+        # addwii_platform 的 source 與 agent_id 同值，避免兩處各自設定漂移。
+        self.agent_id = agent_id or self.source
         # timeout 預設 8 秒：LAN 內網延遲極低，8 秒足夠涵蓋 AI 任務排隊，
         # 同時避免對端異常時請求無限掛住。
         self.timeout = timeout
@@ -177,8 +192,10 @@ class AimosClient:
         }
         return self._request("POST", "/api/v1/tasks", body=body)
 
-    def poll_events(self, source="addwii", limit=20, since=None):
+    def poll_events(self, source=None, limit=20, since=None):
         """GET /lacp/events：拉取 AIMOS 推給本 source 的事件（回傳整包 dict）。"""
+        # source 為 None 時用 self.source：讓 poll 與 report 身分一致。
+        source = source if source is not None else self.source
         params = {"source": source, "limit": limit}
         # since 為 None 時不帶此參數：語意同 list_pending_tasks 的 assignee_id，
         # 「無 since」代表從頭拉，送空字串會被當成非法游標。
@@ -191,7 +208,7 @@ class AimosClient:
         self,
         task_id,
         run_output,
-        agent_id="addwii-ext",
+        agent_id=None,
         status="done",
         output_file_path="",
         duration_sec=0,
@@ -199,9 +216,13 @@ class AimosClient:
     ):
         """POST /lacp/webhook：回報任務執行結果（event_type=agent.result）。
 
-        agent_id 預設 addwii-ext（agents.id=6）為已登記的 agent_code，勿用
-        未登記值（如 addwii_ai），否則 AIMOS 端 FOREIGN KEY 會失敗。
+        agent_id 預設（None → self.agent_id）為 addwii_platform，須對應 agents
+        表的 agent_code；用未登記值會導致 AIMOS 端 FOREIGN KEY 失敗。
         """
+        # agent_id 為 None 時用 client 身分（預設 addwii_platform）。
+        agent_id = agent_id if agent_id is not None else self.agent_id
+        # task_id 依 doc Table 8 為整數 tasks.id；is None or not str().strip()
+        # 對 int 仍可用，且 0 不會被誤判為空（str(0)="0" 非空白）。
         if task_id is None or not str(task_id).strip():
             raise ValueError("task_id 不可為空")
         # status 僅允許 done / fail：避免送出 AIMOS 無法識別的狀態值。
@@ -209,10 +230,10 @@ class AimosClient:
             raise ValueError("status 必須是 done 或 fail")
         body = {
             "event_type": "agent.result",
-            "source": "addwii",
+            "source": self.source,
             "data": {
                 "agent_id": agent_id,
-                "task_id": task_id,
+                "task_id": task_id,  # int 直接放進 JSON，序列化為數字
                 "status": status,
                 "run_output": run_output,
                 "output_file_path": output_file_path,
@@ -222,15 +243,20 @@ class AimosClient:
         }
         return self._request("POST", "/lacp/webhook", body=body)
 
-    def heartbeat(self, agent_id="addwii-ext"):
+    def heartbeat(self, agent_id=None):
         """POST /lacp/webhook：送出心跳維持 services.status=online。
 
-        body 格式依對接文件 v1.0 推定，正式前可與 AIMOS 端確認。
-        agent_id 同樣須用已登記的 addwii-ext，避免被拒。
+        agent_id 預設（None → self.agent_id）為 addwii_platform，須用已登記
+        agent_code，避免被拒。
+        ⚠️ 三份對接 doc 的心跳端點不一致（/api/v1/agents/heartbeat、
+        /lacp/heartbeat、本實作 /lacp/webhook），正式啟用前需與 AIMOS 端
+        確認正確端點；此處刻意不改成未驗證端點。
         """
+        # agent_id 為 None 時用 client 身分（預設 addwii_platform）。
+        agent_id = agent_id if agent_id is not None else self.agent_id
         body = {
             "event_type": "agent.heartbeat",
-            "source": "addwii",
+            "source": self.source,
             "data": {"agent_id": agent_id},
         }
         return self._request("POST", "/lacp/webhook", body=body)
@@ -254,9 +280,10 @@ class AimosClient:
             # 這不是連線錯誤、不該穿透崩潰，退回 fallback 沿用舊游標即可。
             return fallback_since
 
-    def consume_once(self, handler, source="addwii", since=None, dry_run=True, seen_ids=None):
+    def consume_once(self, handler, source=None, since=None, dry_run=True, seen_ids=None):
         """拉一輪事件，只處理 task.created，交給 handler 產生輸出。
 
+        source 為 None 時由 poll_events 解析為 self.source（預設 addwii_platform）。
         dry_run 預設 True 是安全預設：測試時只拉+跑 handler，不回報 AIMOS，
         避免污染對端佇列；確認無誤後才用 dry_run=False 真正 report_result。
 
@@ -324,14 +351,17 @@ class AimosClient:
         return code is not None and 400 <= code < 500
 
     def run_consumer(
-        self, handler, source="addwii", interval=30, dry_run=True, max_iterations=None
+        self, handler, source=None, interval=30, dry_run=True, max_iterations=None
     ):
         """持續輪詢消費迴圈：每輪（live 才心跳）再消費、更新游標、印進度。
 
+        source 為 None 時下游 poll_events 解析為 self.source（預設 addwii_platform）。
         dry_run=True 為完全唯讀：絕不 POST 任何東西（不送 heartbeat、不回報）。
         致命 AimosError（4xx）會中止迴圈，避免金鑰失效時無限空轉。
         max_iterations=None 為無限迴圈；給整數則跑該次數後停（供測試/有限執行）。
         """
+        # 先解析 source（None → self.source），讓警告訊息與下游 poll 身分一致。
+        source = source if source is not None else self.source
         since = None
         iteration = 0
         # seen_ids 持久跨輪：游標無法推進時用 task_id 去重，避免重複回報洗版。
@@ -432,7 +462,17 @@ def _build_arg_parser():
     )
     parser.add_argument("--base-url", default=None, help="覆蓋 AIMOS Base URL")
     parser.add_argument("--key", default=None, help="覆蓋 X-LINGCE-KEY 金鑰")
-    parser.add_argument("--source", default="addwii", help="事件來源名稱（預設 addwii）")
+    parser.add_argument(
+        "--source",
+        default=None,
+        help="身分 source（預設 addwii_platform；舊服務用 --source addwii）",
+    )
+    parser.add_argument(
+        "--agent-id",
+        dest="agent_id",
+        default=None,
+        help="覆蓋 agent_id（選填，預設同 source=addwii_platform）",
+    )
     parser.add_argument("--consume", action="store_true", help="啟動 LACP 輪詢消費者")
     parser.add_argument("--once", action="store_true", help="消費者只跑一輪")
     parser.add_argument("--interval", type=int, default=30, help="輪詢間隔秒數（預設 30）")
@@ -473,7 +513,13 @@ def main():
     try:
         # client 建構併入 try：缺金鑰時 __init__ 拋 AimosError，
         # 走下方繁中錯誤 + exit(1)，而非裸 traceback。
-        client = AimosClient(base_url=args.base_url, lingce_key=args.key)
+        # --source / --agent-id 為 None 時，__init__ 走環境變數 → 預設 addwii_platform。
+        client = AimosClient(
+            base_url=args.base_url,
+            lingce_key=args.key,
+            source=args.source,
+            agent_id=args.agent_id,
+        )
         if args.consume:
             _run_consumer_cli(client, args)
         else:

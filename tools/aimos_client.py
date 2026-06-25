@@ -9,6 +9,9 @@
 - LACP 輪詢消費者（poll /lacp/events → 處理 task.created → 回報 /lacp/webhook），
   繞過尚未建置的 inbound webhook，以輪詢方式消費 AIMOS 推給 addwii 的事件
 
+消費者可用 --engine-url 接真正答案引擎（lacp_engine_api.py sidecar）；
+未指定時用 stub_task_handler 只 echo 任務內容。
+
 執行前需先設定金鑰環境變數，例如：export AIMOS_LINGCE_KEY=你的金鑰
 （或於建構 AimosClient 時以 lingce_key 參數傳入）。本 repo 為 public，
 金鑰一律不寫入程式碼。Base URL 可用 AIMOS_BASE_URL 覆蓋，未設定走預設常數。
@@ -19,6 +22,7 @@ localhost:8505 的 Qwen Bot）；可用環境變數 AIMOS_SOURCE 或 CLI --sourc
 """
 
 import argparse
+import functools
 import json
 import os
 import sys
@@ -356,7 +360,9 @@ class AimosClient:
         """持續輪詢消費迴圈：每輪（live 才心跳）再消費、更新游標、印進度。
 
         source 為 None 時下游 poll_events 解析為 self.source（預設 addwii_platform）。
-        dry_run=True 為完全唯讀：絕不 POST 任何東西（不送 heartbeat、不回報）。
+        dry_run=True：不回報 AIMOS（不送 report_result / heartbeat，任務狀態
+        零寫回）。注意：若接 --engine-url，handler 仍會 POST 到 engine sidecar
+        取答案，僅不寫回 AIMOS。
         致命 AimosError（4xx）會中止迴圈，避免金鑰失效時無限空轉。
         max_iterations=None 為無限迴圈；給整數則跑該次數後停（供測試/有限執行）。
         """
@@ -366,7 +372,7 @@ class AimosClient:
         iteration = 0
         # seen_ids 持久跨輪：游標無法推進時用 task_id 去重，避免重複回報洗版。
         seen_ids = set()
-        mode = "dry-run（完全唯讀）" if dry_run else "live（回報 AIMOS）"
+        mode = "dry-run（不回報 AIMOS）" if dry_run else "live（回報 AIMOS）"
         print(f"=== AIMOS 消費者啟動（{mode}，間隔 {interval}s）===")
         try:
             while max_iterations is None or iteration < max_iterations:
@@ -430,6 +436,42 @@ def stub_task_handler(task_data):
     return f"[stub 回覆] 已收到任務「{title}」：{content}"
 
 
+def engine_http_handler(task_data, engine_url=None):
+    """真實 handler：POST 問題到 lacp_engine_api.py sidecar 取回答案。
+
+    這是接平台引擎的 handler（sidecar 部署在 .140，把六大模組包成 REST）。
+    url 可用 AIMOS_ENGINE_URL 覆蓋，未設走預設 .140:8509。
+    認證：POST 帶 header X-LINGCE-KEY，值從 env AIMOS_ENGINE_KEY 讀，須與
+    sidecar 的 ADDWII_ENGINE_KEY 相同；未設則不帶該 header，sidecar 會回
+    401 → RuntimeError（訊息清楚即可）。
+    成功回 answer 字串；失敗（連線錯誤 / ok=False / 非 200）一律 raise
+    RuntimeError，交由 consume_once 的 handler try 捕捉並回報 fail。
+    """
+    text = f"{task_data.get('title', '')} {task_data.get('content', '')}".strip()
+    url = engine_url or os.environ.get("AIMOS_ENGINE_URL") or "http://192.168.23.140:8509/answer"
+    payload = json.dumps({"question": text}).encode("utf-8")
+    req = urllib.request.Request(url=url, data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+    # 帶 sidecar 認證密鑰；未設時不帶，讓 sidecar 回 401 而非靜默放行。
+    engine_key = os.environ.get("AIMOS_ENGINE_KEY")
+    if engine_key:
+        req.add_header("X-LINGCE-KEY", engine_key)
+    try:
+        # timeout 60 秒：引擎背後是 Qwen2.5-7B 生成，單題可能跑數十秒，
+        # 比一般 LACP 控制請求（8 秒）寬鬆，避免把慢但正常的回答誤判逾時。
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"引擎回非 200（HTTP {e.code}）：{e.reason}") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise RuntimeError(f"無法連線引擎 {url}：{e}") from e
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"引擎回應非合法 JSON：{e}") from e
+    if not data.get("ok"):
+        raise RuntimeError(f"引擎回報失敗：{data.get('error', '未知錯誤')}")
+    return data.get("answer", "")
+
+
 def _run_smoke_test(client):
     """執行唯讀冒煙測試：status → ping → list_pending_tasks。
 
@@ -476,6 +518,12 @@ def _build_arg_parser():
     parser.add_argument("--consume", action="store_true", help="啟動 LACP 輪詢消費者")
     parser.add_argument("--once", action="store_true", help="消費者只跑一輪")
     parser.add_argument("--interval", type=int, default=30, help="輪詢間隔秒數（預設 30）")
+    parser.add_argument(
+        "--engine-url",
+        dest="engine_url",
+        default=None,
+        help="引擎 sidecar /answer URL（選填；設了或有 AIMOS_ENGINE_URL 才接真實引擎）",
+    )
     # dry-run / live 互斥：dry-run 為安全預設（不回報），唯有顯式 --live 才回報 AIMOS。
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -483,7 +531,7 @@ def _build_arg_parser():
         dest="dry_run",
         action="store_true",
         default=True,
-        help="完全唯讀：只拉+印+跑 stub，不送 heartbeat、不回報 AIMOS（預設）",
+        help="不回報 AIMOS（不送 heartbeat/report；接 --engine-url 時仍會呼叫 engine 取答案）（預設）",
     )
     mode.add_argument(
         "--live",
@@ -494,13 +542,29 @@ def _build_arg_parser():
     return parser
 
 
+def _select_handler(args):
+    """有 --engine-url 或 AIMOS_ENGINE_URL → 接真實引擎，否則用 stub。"""
+    engine_url = args.engine_url or os.environ.get("AIMOS_ENGINE_URL")
+    if engine_url:
+        # functools.partial 把 engine_url 綁進去，符合 handler(task_data) 的單參數簽名。
+        print(f"Handler：engine（{engine_url}）")
+        return functools.partial(engine_http_handler, engine_url=engine_url)
+    print("Handler：stub（僅 echo，未接引擎）")
+    return stub_task_handler
+
+
 def _run_consumer_cli(client, args):
     """依 CLI 參數啟動消費者，--once 時只跑一輪。"""
-    mode = "dry-run（完全唯讀，不送任何 POST）" if args.dry_run else "live（回報 AIMOS）"
+    mode = (
+        "dry-run（不回報 AIMOS；接 engine 時仍會呼叫 engine）"
+        if args.dry_run
+        else "live（回報 AIMOS）"
+    )
     print(f"消費者模式：{mode}")
+    handler = _select_handler(args)
     max_iterations = 1 if args.once else None
     client.run_consumer(
-        stub_task_handler,
+        handler,
         source=args.source,
         interval=args.interval,
         dry_run=args.dry_run,

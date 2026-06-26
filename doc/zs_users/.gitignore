@@ -1,0 +1,3 @@
+# 客戶 PII，禁止 commit/push（防止外洩到公開 repo）
+*.csv
+*.xlsx

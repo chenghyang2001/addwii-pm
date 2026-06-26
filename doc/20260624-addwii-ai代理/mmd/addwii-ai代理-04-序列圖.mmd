@@ -1,0 +1,20 @@
+sequenceDiagram
+  participant H as 真人 B
+  participant BC as Bot B
+  participant CL as claude-p
+  participant IE as IntentEngine
+  participant DB as SQLite DB
+  participant CH as Discord 頻道
+
+  H->>CH: 指派 C 做競品分析報告
+  CH->>BC: on_message 觸發
+  BC->>DB: INSERT messages speaker_kind=human
+  BC->>CL: invoke_claude 第1次 生成對話回應
+  CL-->>BC: 好的，我來指派給 C...
+  BC->>IE: parse_intent 第2次 意圖解析
+  IE->>CL: invoke_claude 解析 JSON
+  CL-->>IE: json assign_task assignee=C
+  IE-->>BC: ActionAssignTask 驗證通過
+  BC->>DB: INSERT tasks status=assigned
+  BC->>CH: 好的 已建立任務 競品分析報告
+  BC->>DB: INSERT messages speaker_kind=agent
